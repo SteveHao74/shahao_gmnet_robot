@@ -32,7 +32,7 @@ grasp_server = Pyro4.Proxy("PYRO:grasp@10.12.120.55:6665")
 Pyro4.asyncproxy(grasp_server)
 
 total_length = []
-height_min = 0.143#一定要高于这个高度，避免爪子碰到
+height_min = 0.146#一定要高于这个高度，避免爪子碰到
 
 HHHH = 40
 def Plan(image):
@@ -62,11 +62,29 @@ class GrapsPanler(object):
         self.depth = depth
         self.camera = camera
         self.ur_status = ur_status
-        image = self.process(depth)
+        self.image = self.process(depth)
+        self.mean = np.mean(self.image)
+        self.std = np.std(self.image)        
+        # self.min_depth = np.min(b)#np.min(image[np.nonzero(image)])
         print('----------------------------')
-        print('图像尺寸:', image.shape)
+        print(self.image)
+        print('图像尺寸:', self.image.shape)
         print('----------------------------')
-        self.grasp_pyro = Plan(image)
+        print('深度均值:', self.mean)
+        print('----------------------------')
+        print('深度标准差:', self.std)
+        print('----------------------------')
+        self.grasp_pyro = Plan(self.image)
+        self.min_depth    = self.get_min_depth()
+
+    def get_min_depth(self):
+        img_GaussianBlur = cv2.GaussianBlur(self.image,(5,5),0)
+        img_medianBlur = cv2.medianBlur(img_GaussianBlur,5)#,(5,5))
+        a = img_medianBlur[np.nonzero(img_medianBlur)]
+        b = np.array([n for n in a if n>0.5])
+        min_depth = np.min(b)
+        print('最小深度:', min_depth)
+        return min_depth
 
     def is_ready(self):
         return self.grasp_pyro.ready
@@ -87,7 +105,7 @@ class GrapsPanler(object):
         if result is None:
             return None
         p0, p1, d0, d1, q = result
-        p0 = self.process_to_original(p0)
+        p0 = self.process_to_original(p0)#这里是要把在300x300的小图下的抓取点坐标还原到整个摄像头的原始视野中
         p1 = self.process_to_original(p1)
         self.grasp = Grasp2D.from_endpoint(p0, p1, d0, d1, q)
         return self.grasp
@@ -115,7 +133,7 @@ class GrapsPanler(object):
         img = cv2.resize(img, (300, 300))
         return img
 
-    def process_to_original(self, p):
+    def process_to_original(self, p):#这里是要把在300x300的小图下的抓取点坐标还原到整个摄像头的原始视野中
         zoom = np.array(p) / self.SCALE
         crop = zoom + self.CROP_START
         return crop
@@ -134,7 +152,7 @@ class NewPick(ServoGrasp):
         self.ex = False
         self.shot_one = False
         self.image_num = 0
-        self.init_pose = np.array([0.26964,-0.10738,0.39318,2.9278,1.0482,0.0885])
+        self.init_pose = np.array([0.26964,-0.10738,0.39318,2.9278,1.0482,0.0885])#根据示教板的读数确定的初始位姿
         self.init_pose_matrix = vector_to_matrix(self.init_pose) #使用opencv库将旋转向量表示法转换为旋转矩阵表示法
         print(self.init_pose_matrix )
         urs.movel_to(self.init_pose, v=0.25)
@@ -156,13 +174,13 @@ class NewPick(ServoGrasp):
                 depth = np.mean(depths, axis=0)#计算几张深度图矩阵的均值，depth存着的是均值
                 mean = np.mean(depth)
                 new_std = np.std(depth)
-                
-                print("标准差",new_std)
+                # print("平均值",mean)
+                # print("标准差",new_std)
             
                 # fig = plt.figure()
                 # ax1 = fig.add_subplot(221)
                 # ax1.imshow(depth, cmap= plt.cm.gray)
-                depth =  (depth-self.table_depth)#/new_std* 0.005
+                # depth =  (depth-self.table_depth)#/new_std* 0.005
                 # ax2 = fig.add_subplot(222)
                 # ax2.imshow(self.table_depth, cmap= plt.cm.gray)
                 # ax3 = fig.add_subplot(223)
@@ -172,6 +190,12 @@ class NewPick(ServoGrasp):
                 # print("-------------shahaoshahao",depth)
                 self.grasp_planer = GrapsPanler(
                     rgb, depth, self.camera, ur_status)
+                self.mean= self.grasp_planer.mean
+                self.std= self.grasp_planer.std
+                self.grasp_depth = self.grasp_planer.min_depth
+                self.processed_depth_img = self.grasp_planer.image#得到经过中值滤波的深度图
+                
+
             elif self.grasp_planer.is_ready():
                 ggg = self.grasp_planer.get_grasp()
                 if ggg is None:
@@ -179,6 +203,11 @@ class NewPick(ServoGrasp):
                 self.grasp = ggg
                 self.grasp_planer = None
                 self.planing = False
+                depth_point = self.grasp.center - GrapsPanler.CROP_START
+                print("抓取点坐标",depth_point)
+                self.grasp_depth=self.processed_depth_img[int(depth_point[0]/1.6),int(depth_point[1]/1.6)] 
+                print("抓取的宽度为",self.grasp_depth)
+
         if self.ex:
             # 如果没有目标或者达到目标则切换下一个目标
             if self.target is None or self.is_get_target():
@@ -232,13 +261,10 @@ class NewPick(ServoGrasp):
         self.planing = True
 
     def start_target(self):
-        print("1")
         if self.target[0] == 'move':
             self.urs.movel_to(self.target[1], v=0.1)
-            print("shahao")
         elif self.target[0] == 'close':
             self.gripper.goto(self.target[1])
-            print("lalala")
             if self.target[1] == 0:
                 time.sleep(0.5)
         elif self.target[0] == 'open':
@@ -261,16 +287,28 @@ class NewPick(ServoGrasp):
         if self.grasp is not None:
             self.ex = True
             ur_status = self.urs.ur_status()
-            print('111111111111111111111111')
-            g_world, width = self.tf.grasp2d_to_matrix(self.grasp, ur_status)
-            gp_world = self.tf.matrix_translation(g_world, z=height_min)
+            print('111111111111111,ur_status',ur_status)
+
+            g_world, width = self.tf.grasp2d_to_matrix(self.grasp, ur_status,grasp_depth = self.grasp_depth)#得到了目标抓取在世界坐标系下的位姿，和抓取宽度（两个抓取点间的距离）
+            #gp_world = self.tf.matrix_translation(g_world, z=height_min)
+            print("g_world",g_world)
+            g_base = self.tf.base_from_world(g_world)
+            g_base[2,3] =g_base[2,3]+0.16# 0.157#
+            if g_base[2,3] < 0.157:
+                g_base[2,3] = 0.157
+            gtop_base =  g_base.copy()
+            gtop_base[2,3] =  self.init_pose[2] 
             targets = []
-            print("zhuaquweizi",self.tf.base_from_world(gp_world))
-            targets.append(['move', self.tf.base_from_world(gp_world)])
-            targets.append(['close', width])
-            targets.append(['move', self.tf.base_from_world(g_world)])
+            print("top",gtop_base)
+            print("zhuaquweizi",g_base)
+            print("width",width)
+            targets.append(['move',gtop_base])
+            # targets.append(['close', 0.05])
+            targets.append(['open', None])
+            targets.append(['move', g_base])
             targets.append(['close', 0])
-            targets.append(['move', self.tf.base_from_world(gp_world)])
+            # targets.append(['close', 0.04])
+            targets.append(['move',gtop_base])
             targets.append(['move', self.tf.base_from_world(self.init_pose_matrix)])
             targets.append(['open', None])
             self.targets = targets

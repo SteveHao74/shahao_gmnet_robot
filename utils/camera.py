@@ -28,6 +28,7 @@ class CameraBase(object):
         self.width = self.size[0]
         self.height = self.size[1]
         self.de_matrix = np.linalg.inv(self.matrix)
+        print("inverse",self.de_matrix)
 
     def project(self, point):
         """ 把3d空间中的点投影到图像上
@@ -47,7 +48,9 @@ class CameraBase(object):
         return: 相机坐标系下的3D点,(x,y,z)
         """
         p_2d = depth * np.r_[point_image, 1.]
+        
         point_3d = self.de_matrix.dot(np.r_[p_2d, 1.])[:3]
+        print("point_3d",point_3d)
         return point_3d
 
 

@@ -241,9 +241,9 @@ class Robotiq85(object):
 # if __name__ == "__main__":
 #     gripper = Robotiq85()
 #     gripper.activate()
-#     gripper.open()
+#     # gripper.open()
 #     time.sleep(2)
 #     gripper.close()
-#     print(gripper.getStatus())
+# #     print(gripper.getStatus())
 #     time.sleep(2)
 
