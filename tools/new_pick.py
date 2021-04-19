@@ -59,32 +59,24 @@ class GrapsPanler(object):
 
     def __init__(self, rgb, depth, camera, ur_status=None):
         self.rgb = rgb
-        self.depth = depth
         self.camera = camera
         self.ur_status = ur_status
         self.image = self.process(depth)
-        self.mean = np.mean(self.image)
-        self.std = np.std(self.image)        
-        # self.min_depth = np.min(b)#np.min(image[np.nonzero(image)])
-        print('----------------------------')
-        print(self.image)
-        print('图像尺寸:', self.image.shape)
-        print('----------------------------')
-        print('深度均值:', self.mean)
-        print('----------------------------')
-        print('深度标准差:', self.std)
-        print('----------------------------')
-        self.grasp_pyro = Plan(self.image)
-        self.min_depth    = self.get_min_depth()
+        self.min_depth,self.img_medianBlur    = self.get_min_depth()
+        self.depth = cv2.GaussianBlur(self.image,(3,3),0)
+        self.mean = np.mean(self.depth)
+        self.std = np.std(self.depth)        
+        self.grasp_pyro = Plan(self.depth)
+
 
     def get_min_depth(self):
         img_GaussianBlur = cv2.GaussianBlur(self.image,(5,5),0)
         img_medianBlur = cv2.medianBlur(img_GaussianBlur,5)#,(5,5))
         a = img_medianBlur[np.nonzero(img_medianBlur)]
-        b = np.array([n for n in a if n>0.5])
+        b = np.array([n for n in a if n>0.65])
         min_depth = np.min(b)
         print('最小深度:', min_depth)
-        return min_depth
+        return min_depth,img_medianBlur
 
     def is_ready(self):
         return self.grasp_pyro.ready
@@ -154,7 +146,7 @@ class NewPick(ServoGrasp):
         self.image_num = 0
         self.init_pose = np.array([0.26964,-0.10738,0.39318,2.9278,1.0482,0.0885])#根据示教板的读数确定的初始位姿
         self.init_pose_matrix = vector_to_matrix(self.init_pose) #使用opencv库将旋转向量表示法转换为旋转矩阵表示法
-        print(self.init_pose_matrix )
+        # print(self.init_pose_matrix )
         urs.movel_to(self.init_pose, v=0.25)
         super().__init__(camera, urs, tf)
 
@@ -190,10 +182,11 @@ class NewPick(ServoGrasp):
                 # print("-------------shahaoshahao",depth)
                 self.grasp_planer = GrapsPanler(
                     rgb, depth, self.camera, ur_status)
+                self.min_depth = self.grasp_planer.min_depth
                 self.mean= self.grasp_planer.mean
                 self.std= self.grasp_planer.std
                 self.grasp_depth = self.grasp_planer.min_depth
-                self.processed_depth_img = self.grasp_planer.image#得到经过中值滤波的深度图
+                self.processed_depth_img = self.grasp_planer.img_medianBlur#得到经过中值滤波的深度图
                 
 
             elif self.grasp_planer.is_ready():
@@ -203,10 +196,17 @@ class NewPick(ServoGrasp):
                 self.grasp = ggg
                 self.grasp_planer = None
                 self.planing = False
-                depth_point = self.grasp.center - GrapsPanler.CROP_START
-                print("抓取点坐标",depth_point)
-                self.grasp_depth=self.processed_depth_img[int(depth_point[0]/1.6),int(depth_point[1]/1.6)] 
-                print("抓取的宽度为",self.grasp_depth)
+                if self.grasp :
+                    depth_point = self.grasp.center - GrapsPanler.CROP_START
+                    print("抓取点坐标",int(depth_point[0]/1.6),int(depth_point[1]/1.6))
+                    self.grasp_depth=self.processed_depth_img[int(depth_point[0]/1.6),int(depth_point[1]/1.6)] 
+                    print("抓取估计深度为",self.grasp_depth)
+                    if self.grasp_depth <0.6:
+                        print("@@@深度获取异常")
+                        self.grasp_depth = self.mean
+                    # self.grasp_depth=(self.grasp_depth+self.min_depth)/2 
+                        print("抓取最终深度为",self.grasp_depth)
+
 
         if self.ex:
             # 如果没有目标或者达到目标则切换下一个目标
@@ -220,16 +220,16 @@ class NewPick(ServoGrasp):
                     self.target = None
         # save_path="/home/shahao/gmnet_robot_shahao"            
         if self.shot_one:
-            np.save('npy/%03d_raw.npy'%self.image_num, depth)
-            np.save('npy/%03d.npy'%self.image_num, GrapsPanler.process(depth))
-            cv2.imwrite('npy/%03d.png'%self.image_num, GrapsPanler.process_rgb(rgb))
+            np.save('../validation_test/%03d_raw.npy'%self.image_num, depth)
+            np.save('../validation_test/%03d.npy'%self.image_num, GrapsPanler.process(depth))
+            cv2.imwrite('../validation_test/%03d.png'%self.image_num, GrapsPanler.process_rgb(rgb))
             self.image_num += 1
             self.shot_one = False
 
         plt.clf()
         plt.axis('off')
         plt.imshow(rgb)
-        # plt.imshow(GrapsPanler.process(depth))
+        plt.imshow(GrapsPanler.process(depth))
         self.plot_rect(GrapsPanler.CROP_START, GrapsPanler.CROP_SIZE, GrapsPanler.CROP_SIZE)
         # plt.colorbar()
         plt.text(50, 50, 'ON' if self.planing else 'OFF', size=150,
@@ -302,6 +302,7 @@ class NewPick(ServoGrasp):
             print("top",gtop_base)
             print("zhuaquweizi",g_base)
             print("width",width)
+            targets.append(['move', self.tf.base_from_world(self.init_pose_matrix)])
             targets.append(['move',gtop_base])
             # targets.append(['close', 0.05])
             targets.append(['open', None])
